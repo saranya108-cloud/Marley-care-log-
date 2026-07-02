@@ -12,10 +12,11 @@ This is a logging tool only. It is not medical advice.
 
 ## Planned Features
 
-- Grooming schedule, hypoallergenic sham
+- Grooming schedule
 - Daily care entries
 - Meal and treat tracking
 - Allergy and itch symptom tracking
+- Allergy shampoo and topical treatments 
 - GI/stool notes
 - Medication and treatment log
 - Cytopoint date tracking
