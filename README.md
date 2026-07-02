@@ -12,6 +12,7 @@ This is a logging tool only. It is not medical advice.
 
 ## Planned Features
 
+- Grooming schedule, hypoallergenic sham
 - Daily care entries
 - Meal and treat tracking
 - Allergy and itch symptom tracking
