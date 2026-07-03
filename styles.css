@@ -129,6 +129,44 @@ h1 { font-size: 1.25rem; letter-spacing: -0.01em; }
 .muted { color: var(--muted); }
 .small { font-size: 0.8rem; }
 
+#dashboard-content > * + * { margin-top: 16px; }
+#dashboard-content > [hidden] + * { margin-top: 0; }
+
+/* ---------- Reminder banners ---------- */
+.banner {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+.banner + .banner { margin-top: 8px; }
+.banner-danger {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ---------- Food tracker ---------- */
+.food-days { font-size: 1.4rem; font-weight: 700; margin-bottom: 6px; }
+.food-days.food-warn { color: var(--warn); }
+.food-days.food-danger { color: var(--danger); }
+.food-bar {
+  height: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.food-bar-fill { height: 100%; background: var(--good); border-radius: 999px; }
+.food-bar-fill.food-warn { background: var(--warn); }
+.food-bar-fill.food-danger { background: var(--danger); }
+#food-status .btn { margin-top: 10px; }
+.food-form-btns { margin-top: 12px; }
+
 /* ---------- Buttons ---------- */
 .btn {
   appearance: none;
