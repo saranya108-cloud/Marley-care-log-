@@ -14,14 +14,14 @@ This is a logging tool only. It is not medical advice.
 
 - Daily care entries
 - Meal and treat tracking
-- Perscription food order reminders and tracker
+- Prescription food order reminders and tracker
 - Allergy and itch symptom tracking
 - Grooming Schedule
 - Allergy shampoo and topical treatments 
 - GI/stool notes
 - Medication and treatment log
 - Cytopoint date tracking
-- VARL immunitherapy check-ins 
+- VARL immunotherapy check-ins 
 - Suspected trigger notes
 - Vet-ready summary export
 - Local-first data storage
