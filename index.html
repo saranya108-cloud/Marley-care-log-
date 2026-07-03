@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>Marley Care Log</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐩</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-inner">
+    <div class="header-title">
+      <span class="header-emoji" aria-hidden="true">🐩</span>
+      <div>
+        <h1>Marley Care Log</h1>
+        <p class="header-sub">15 lb poodle mix &middot; allergies, meals &amp; treatments</p>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Main sections">
+      <button class="tab active" data-view="dashboard" role="tab" aria-selected="true">Dashboard</button>
+      <button class="tab" data-view="log" role="tab" aria-selected="false">Log</button>
+      <button class="tab" data-view="vet" role="tab" aria-selected="false">Vet Summary</button>
+      <button class="tab" data-view="data" role="tab" aria-selected="false">Data</button>
+    </nav>
+  </div>
+</header>
+
+<main class="app-main">
+
+  <!-- ============ DASHBOARD ============ -->
+  <section id="view-dashboard" class="view">
+    <div id="dashboard-empty" class="empty-state" hidden>
+      <div class="empty-emoji">🐾</div>
+      <h2>No entries yet</h2>
+      <p>Start logging Marley's meals, itch symptoms, and treatments — patterns will show up here.</p>
+      <div class="empty-actions">
+        <button class="btn btn-primary" id="empty-add-btn">Add first entry</button>
+        <button class="btn" id="empty-sample-btn">Load sample data</button>
+      </div>
+    </div>
+
+    <div id="dashboard-content">
+      <div class="stat-grid" id="stat-grid"></div>
+
+      <div class="card" id="itch-strip-card">
+        <h3 class="card-title">Itch severity — last 14 days</h3>
+        <div id="itch-strip" class="itch-strip"></div>
+        <p class="muted small" id="itch-strip-note"></p>
+      </div>
+
+      <div class="card" id="vet-questions-card" hidden>
+        <h3 class="card-title">❓ Open questions for the vet</h3>
+        <ul id="vet-questions-list" class="plain-list"></ul>
+      </div>
+
+      <div class="card">
+        <div class="card-head-row">
+          <h3 class="card-title">Recent entries</h3>
+          <button class="btn btn-small" id="recent-see-all">See all →</button>
+        </div>
+        <div id="recent-entries"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ LOG ============ -->
+  <section id="view-log" class="view" hidden>
+    <div class="card form-card">
+      <div class="card-head-row">
+        <h3 class="card-title" id="form-title">Add entry</h3>
+        <button class="btn btn-small" id="form-cancel-edit" hidden>Cancel edit</button>
+      </div>
+      <form id="entry-form" novalidate>
+        <label class="field-label">Type</label>
+        <div class="type-chips" id="type-chips"></div>
+
+        <div class="form-row">
+          <div class="field">
+            <label class="field-label" for="f-date">Date</label>
+            <input type="date" id="f-date" required>
+          </div>
+          <div class="field">
+            <label class="field-label" for="f-time">Time <span class="muted">(optional)</span></label>
+            <input type="time" id="f-time">
+          </div>
+        </div>
+
+        <div class="field" id="severity-field" hidden>
+          <label class="field-label">Itch severity</label>
+          <div class="severity-picker" id="severity-picker" role="radiogroup" aria-label="Itch severity 1 to 5"></div>
+        </div>
+
+        <div class="field" id="stool-field" hidden>
+          <label class="field-label" for="f-stool">GI observation</label>
+          <select id="f-stool">
+            <option value="normal">Normal stool</option>
+            <option value="soft">Soft stool</option>
+            <option value="diarrhea">Diarrhea</option>
+            <option value="mucus">Mucus / blood</option>
+            <option value="constipated">Constipated</option>
+            <option value="vomit">Vomiting</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="f-details">Details</label>
+          <textarea id="f-details" rows="2" placeholder="What happened?"></textarea>
+          <p class="field-error" id="details-error" hidden>Please add a short note about what happened.</p>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block" id="form-submit">Save entry</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="filters">
+        <input type="search" id="filter-search" placeholder="Search entries…" aria-label="Search entries">
+        <select id="filter-type" aria-label="Filter by type"><option value="">All types</option></select>
+        <select id="filter-range" aria-label="Filter by date range">
+          <option value="">All time</option>
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+      </div>
+      <p class="muted small" id="filter-count"></p>
+      <div id="entry-list"></div>
+    </div>
+  </section>
+
+  <!-- ============ VET SUMMARY ============ -->
+  <section id="view-vet" class="view" hidden>
+    <div class="card">
+      <h3 class="card-title">Vet-ready summary</h3>
+      <p class="muted">A Markdown summary of Marley's symptoms, GI patterns, medications and questions — ready to bring to an appointment.</p>
+      <div class="vet-controls">
+        <label class="field-label" for="vet-range">Period</label>
+        <select id="vet-range">
+          <option value="14">Last 14 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="all">All time</option>
+        </select>
+        <button class="btn" id="vet-copy">📋 Copy Markdown</button>
+        <button class="btn" id="vet-download">⬇ Download .md</button>
+      </div>
+      <pre id="vet-preview" class="vet-preview" aria-label="Vet summary preview"></pre>
+    </div>
+  </section>
+
+  <!-- ============ DATA ============ -->
+  <section id="view-data" class="view" hidden>
+    <div class="card">
+      <h3 class="card-title">Your data</h3>
+      <p class="muted" id="data-info"></p>
+      <p class="muted small">Everything is stored locally in this browser (localStorage). Export regularly so your entries are never trapped in one device.</p>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Export</h3>
+      <div class="btn-row">
+        <button class="btn" id="export-json">⬇ Export JSON (full backup)</button>
+        <button class="btn" id="export-csv">⬇ Export CSV (spreadsheet)</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Import</h3>
+      <p class="muted small">Restore a JSON backup exported from Marley Care Log. You'll choose whether to merge with or replace current entries.</p>
+      <input type="file" id="import-file" accept=".json,application/json">
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Sample data</h3>
+      <p class="muted small">Add ~6 weeks of realistic demo entries to try out the app. They mix with your real entries, so best used on an empty log.</p>
+      <button class="btn" id="sample-btn">Load sample data</button>
+    </div>
+
+    <div class="card danger-card">
+      <h3 class="card-title">Danger zone</h3>
+      <button class="btn btn-danger" id="clear-btn">Delete all entries</button>
+    </div>
+  </section>
+
+</main>
+
+<footer class="app-footer">
+  <p>Local-first &middot; no accounts, no cloud &middot; a logging tool, not medical advice 🐾</p>
+</footer>
+
+<!-- Confirm / choice dialog -->
+<dialog id="app-dialog">
+  <p id="dialog-message"></p>
+  <div class="dialog-buttons" id="dialog-buttons"></div>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
