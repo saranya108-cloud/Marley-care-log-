@@ -21,7 +21,7 @@ This is a logging tool only. It is not medical advice.
 - GI/stool notes
 - Medication and treatment log
 - Cytopoint date tracking
-- VARL immunitherapy schedule and doee tracking
+- VARL immunitherapy check-ins 
 - Suspected trigger notes
 - Vet-ready summary export
 - Local-first data storage
