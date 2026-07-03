@@ -6,6 +6,9 @@
 <meta name="color-scheme" content="light dark">
 <title>Marley Care Log</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐩</text></svg>">
+<meta name="theme-color" content="#c2703e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -43,7 +46,39 @@
     </div>
 
     <div id="dashboard-content">
+      <div id="banners" hidden></div>
+
       <div class="stat-grid" id="stat-grid"></div>
+
+      <div class="card" id="cyto-cycle-card" hidden>
+        <h3 class="card-title">💉 Cytopoint cycle — itch by week since injection</h3>
+        <div id="cyto-cycle-strip" class="itch-strip"></div>
+        <p class="muted small" id="cyto-cycle-note"></p>
+      </div>
+
+      <div class="card" id="food-card">
+        <div class="card-head-row">
+          <h3 class="card-title">🍗 Prescription food</h3>
+          <button class="btn btn-small" id="food-edit-btn">Edit</button>
+        </div>
+        <div id="food-status"></div>
+        <form id="food-form" hidden>
+          <div class="form-row">
+            <div class="field">
+              <label class="field-label" for="food-opened">Bag opened on</label>
+              <input type="date" id="food-opened">
+            </div>
+            <div class="field">
+              <label class="field-label" for="food-lasts">Bag lasts (days)</label>
+              <input type="number" id="food-lasts" min="1" max="365" placeholder="e.g. 28">
+            </div>
+          </div>
+          <div class="btn-row food-form-btns">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" class="btn" id="food-form-cancel">Cancel</button>
+          </div>
+        </form>
+      </div>
 
       <div class="card" id="itch-strip-card">
         <h3 class="card-title">Itch severity — last 14 days</h3>

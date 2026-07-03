@@ -7,6 +7,7 @@
 const STORAGE_KEY = "marley-care-log:v1";
 const APP_NAME = "marley-care-log";
 const DATA_VERSION = 1;
+const CYTOPOINT_INTERVAL_DAYS = 42; // Marley gets Cytopoint every 6 weeks
 
 const TYPES = {
   meal:       { label: "Meal",             icon: "🍗" },
@@ -49,28 +50,41 @@ const DETAILS_PLACEHOLDERS = {
 
 // ============ Storage ============
 
-function loadEntries() {
+function sanitizeFood(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (typeof raw.openedDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw.openedDate)) return null;
+  const lasts = Number(raw.lastsDays);
+  if (!Number.isInteger(lasts) || lasts < 1 || lasts > 365) return null;
+  return { openedDate: raw.openedDate, lastsDays: lasts };
+}
+
+function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
+    if (!raw) return { entries: [], food: null };
     const data = JSON.parse(raw);
-    return Array.isArray(data.entries) ? data.entries : [];
+    return {
+      entries: Array.isArray(data.entries) ? data.entries : [],
+      food: sanitizeFood(data.food),
+    };
   } catch (e) {
-    console.error("Failed to load entries", e);
-    return [];
+    console.error("Failed to load data", e);
+    return { entries: [], food: null };
   }
 }
 
-function saveEntries() {
+function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ app: APP_NAME, version: DATA_VERSION, entries }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ app: APP_NAME, version: DATA_VERSION, entries, food }));
   } catch (e) {
-    console.error("Failed to save entries", e);
+    console.error("Failed to save data", e);
     showToast("⚠️ Could not save — browser storage may be full");
   }
 }
 
-let entries = loadEntries();
+const _loaded = loadState();
+let entries = _loaded.entries;
+let food = _loaded.food; // { openedDate, lastsDays } or null
 
 // ============ Helpers ============
 
@@ -98,6 +112,22 @@ function parseDate(str) {
 
 function daysBetween(dateStrA, dateStrB) {
   return Math.round((parseDate(dateStrB) - parseDate(dateStrA)) / 86400000);
+}
+
+function addDays(dateStr, n) {
+  const d = parseDate(dateStr);
+  d.setDate(d.getDate() + n);
+  return toDateStr(d);
+}
+
+function foodDaysLeft() {
+  if (!food) return null;
+  return food.lastsDays - daysBetween(food.openedDate, todayStr());
+}
+
+function lastCytopoint() {
+  const cyto = sortEntries(entries.filter((e) => e.type === "cytopoint"));
+  return cyto[0] || null;
 }
 
 function fmtDate(dateStr) {
@@ -329,7 +359,7 @@ document.getElementById("entry-form").addEventListener("submit", (ev) => {
     entries.push({ id: uid(), ...base, createdAt: now, updatedAt: now });
     showToast("Entry saved ✓");
   }
-  saveEntries();
+  saveState();
   resetForm();
   renderEntryList();
 });
@@ -344,7 +374,7 @@ async function deleteEntry(id) {
   if (!ok) return;
   entries = entries.filter((x) => x.id !== id);
   if (editingId === id) resetForm();
-  saveEntries();
+  saveState();
   renderEntryList();
   renderDashboard();
   showToast("Entry deleted");
@@ -472,13 +502,11 @@ function renderDashboard() {
   const today = todayStr();
 
   // --- Stat: days since last Cytopoint ---
-  const cyto = sortEntries(entries.filter((e) => e.type === "cytopoint"));
-  const lastCyto = cyto[0];
+  const lastCyto = lastCytopoint();
   const cytoDays = lastCyto ? daysBetween(lastCyto.date, today) : null;
   let cytoNote = "no injections logged";
   if (lastCyto) {
-    cytoNote = `last: ${fmtDate(lastCyto.date)}`;
-    if (cytoDays >= 42) cytoNote += " · may be due soon";
+    cytoNote = `last: ${fmtDate(lastCyto.date)}<br>next due ~${fmtDate(addDays(lastCyto.date, CYTOPOINT_INTERVAL_DAYS))}`;
   }
 
   // --- Stat: itch trend (7-day avg vs previous 7) ---
@@ -560,7 +588,151 @@ function renderDashboard() {
   // --- Recent entries ---
   document.getElementById("recent-entries").innerHTML =
     sortEntries(entries).slice(0, 5).map((e) => entryItemHtml(e, false)).join("");
+
+  renderBanners();
+  renderCytoCycle();
+  renderFoodCard();
 }
+
+// --- Reminder banners (Cytopoint every 6 weeks + food reorder) ---
+
+function renderBanners() {
+  const wrap = document.getElementById("banners");
+  const items = [];
+
+  const lastCyto = lastCytopoint();
+  if (lastCyto) {
+    const until = CYTOPOINT_INTERVAL_DAYS - daysBetween(lastCyto.date, todayStr());
+    const due = addDays(lastCyto.date, CYTOPOINT_INTERVAL_DAYS);
+    if (until < 0) items.push({ danger: true, text: `💉 Cytopoint overdue by ${-until} day${until === -1 ? "" : "s"} — was due ${fmtDate(due)} (every 6 weeks)` });
+    else if (until === 0) items.push({ danger: true, text: `💉 Cytopoint due today (every 6 weeks)` });
+    else if (until <= 7) items.push({ danger: false, text: `💉 Cytopoint due in ${until} day${until === 1 ? "" : "s"} (~${fmtDate(due)})` });
+  }
+
+  const left = foodDaysLeft();
+  if (left != null) {
+    if (left <= 0) items.push({ danger: true, text: `🍗 Prescription food bag should be empty — reorder now` });
+    else if (left <= 7) items.push({ danger: false, text: `🍗 ~${left} day${left === 1 ? "" : "s"} of prescription food left — time to reorder` });
+  }
+
+  wrap.hidden = items.length === 0;
+  wrap.innerHTML = items.map((i) => `<div class="banner${i.danger ? " banner-danger" : ""}">${i.text}</div>`).join("");
+}
+
+// --- Cytopoint cycle symptom tracker ---
+// Shows average itch severity for each week since the last injection, so it's
+// easy to spot itching creeping back toward the end of the 6-week cycle.
+
+function renderCytoCycle() {
+  const card = document.getElementById("cyto-cycle-card");
+  const lastCyto = lastCytopoint();
+  const symptoms = entries.filter((e) => e.type === "symptom" && e.severity);
+  if (!lastCyto || !symptoms.length) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  const today = todayStr();
+  const cytoDays = daysBetween(lastCyto.date, today);
+  const weeks = Math.max(6, Math.ceil((cytoDays + 1) / 7));
+  let html = "";
+  let logged = 0;
+  for (let w = 0; w < weeks; w++) {
+    const start = addDays(lastCyto.date, w * 7);
+    const end = addDays(lastCyto.date, w * 7 + 6);
+    const inWeek = symptoms.filter((e) => e.date >= start && e.date <= end && e.date <= today);
+    const avg = inWeek.length ? inWeek.reduce((s, e) => s + e.severity, 0) / inWeek.length : null;
+    const level = avg ? Math.min(5, Math.max(1, Math.round(avg))) : null;
+    if (avg) logged++;
+    const future = start > today;
+    const title = future
+      ? `Week ${w + 1}: upcoming`
+      : avg
+        ? `Week ${w + 1} (${fmtDate(start)}–${fmtDate(end)}): avg itch ${avg.toFixed(1)}/5, ${inWeek.length} entr${inWeek.length === 1 ? "y" : "ies"}`
+        : `Week ${w + 1} (${fmtDate(start)}–${fmtDate(end)}): no itch logged`;
+    html += `<div class="itch-day">
+      <div class="itch-cell ${level ? "sev-" + level : ""}" title="${title}" style="${future ? "opacity:0.35" : ""}">${avg ? avg.toFixed(1) : ""}</div>
+      W${w + 1}
+    </div>`;
+  }
+  document.getElementById("cyto-cycle-strip").innerHTML = html;
+  document.getElementById("cyto-cycle-note").textContent = logged
+    ? `Average itch severity per week since the ${fmtDate(lastCyto.date)} injection (day ${cytoDays + 1} of the 6-week cycle). Rising numbers late in the cycle suggest the shot is wearing off early.`
+    : `No itch symptoms logged since the ${fmtDate(lastCyto.date)} injection. 🎉`;
+}
+
+// --- Prescription food tracker ---
+
+let foodFormOpen = false;
+
+function renderFoodCard() {
+  const form = document.getElementById("food-form");
+  const status = document.getElementById("food-status");
+  const editBtn = document.getElementById("food-edit-btn");
+  const showForm = foodFormOpen || !food;
+  form.hidden = !showForm;
+  editBtn.hidden = !food || showForm;
+  if (showForm) {
+    document.getElementById("food-opened").value = food ? food.openedDate : todayStr();
+    document.getElementById("food-lasts").value = food ? food.lastsDays : "";
+    document.getElementById("food-form-cancel").hidden = !food;
+  }
+
+  if (!food) {
+    status.innerHTML = `<p class="muted small">Log when you open a bag and how long a bag usually lasts — a reorder reminder will show up here when it runs low.</p>`;
+    return;
+  }
+  const left = foodDaysLeft();
+  const outDate = addDays(food.openedDate, food.lastsDays);
+  const cls = left <= 2 ? "food-danger" : left <= 7 ? "food-warn" : "";
+  const pct = Math.max(0, Math.min(100, (left / food.lastsDays) * 100));
+  status.innerHTML = `
+    <div class="food-days ${cls}">${left <= 0 ? "Out of food — reorder!" : `~${left} day${left === 1 ? "" : "s"} of food left`}</div>
+    <div class="food-bar"><div class="food-bar-fill ${cls}" style="width:${pct}%"></div></div>
+    <p class="muted small">Bag opened ${fmtDate(food.openedDate)} · lasts ~${food.lastsDays} days · runs out ~${fmtDate(outDate)}</p>
+    <button class="btn btn-small" id="food-newbag" type="button">🛍 Opened a new bag today</button>`;
+}
+
+document.getElementById("food-edit-btn").addEventListener("click", () => {
+  foodFormOpen = true;
+  renderFoodCard();
+});
+
+document.getElementById("food-form-cancel").addEventListener("click", () => {
+  foodFormOpen = false;
+  renderFoodCard();
+});
+
+document.getElementById("food-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const opened = document.getElementById("food-opened").value;
+  const lasts = parseInt(document.getElementById("food-lasts").value, 10);
+  if (!opened || !Number.isInteger(lasts) || lasts < 1 || lasts > 365) {
+    showToast("Enter the opened date and how many days a bag lasts");
+    return;
+  }
+  if (opened > todayStr()) {
+    showToast("The opened date can't be in the future");
+    return;
+  }
+  food = { openedDate: opened, lastsDays: lasts };
+  foodFormOpen = false;
+  saveState();
+  renderDashboard();
+  showToast("Food tracker updated ✓");
+});
+
+document.getElementById("food-status").addEventListener("click", (ev) => {
+  if (ev.target.id !== "food-newbag" || !food) return;
+  food = { ...food, openedDate: todayStr() };
+  const now = new Date().toISOString();
+  entries.push({ id: uid(), type: "note", date: todayStr(), time: null, details: "Opened a new bag of prescription food", createdAt: now, updatedAt: now });
+  saveState();
+  renderDashboard();
+  renderEntryList();
+  showToast("New bag logged 🛍");
+});
 
 document.getElementById("recent-see-all").addEventListener("click", () => switchView("log"));
 document.getElementById("empty-add-btn").addEventListener("click", () => switchView("log"));
@@ -640,9 +812,26 @@ function generateVetSummary(rangeDays) {
     lines.push(`- No Cytopoint injections logged.`);
   } else {
     const last = allCyto[0];
-    lines.push(`- Last injection: ${last.date} (${daysBetween(last.date, today)} days ago).`);
+    const lastDays = daysBetween(last.date, today);
+    const until = CYTOPOINT_INTERVAL_DAYS - lastDays;
+    const due = addDays(last.date, CYTOPOINT_INTERVAL_DAYS);
+    lines.push(`- Last injection: ${last.date} (${lastDays} days ago).`);
+    lines.push(`- Interval: every 6 weeks → next due ~${due}${until < 0 ? ` (overdue by ${-until} days)` : until === 0 ? " (due today)" : ""}.`);
     if (allCyto.length > 1) {
       lines.push(`- Previous injections: ${allCyto.slice(1, 5).map((e) => e.date).join(", ")}${allCyto.length > 5 ? ", …" : ""}`);
+    }
+    // Itch by week of the current cycle — helps judge if the shot wears off early
+    const cycleSym = entries.filter((e) => e.type === "symptom" && e.severity && e.date >= last.date && e.date <= today);
+    if (cycleSym.length) {
+      lines.push(`- Itch by week since this injection:`);
+      const weeks = Math.ceil((lastDays + 1) / 7);
+      for (let w = 0; w < weeks; w++) {
+        const start = addDays(last.date, w * 7);
+        const end = addDays(last.date, w * 7 + 6);
+        const inWeek = cycleSym.filter((e) => e.date >= start && e.date <= end);
+        const avg = inWeek.length ? (inWeek.reduce((s, e) => s + e.severity, 0) / inWeek.length).toFixed(1) : null;
+        lines.push(`  - Week ${w + 1}: ${avg ? `avg itch ${avg}/5 (${inWeek.length} entr${inWeek.length === 1 ? "y" : "ies"})` : "no itch logged"}`);
+      }
     }
   }
   lines.push(``);
@@ -668,6 +857,10 @@ function generateVetSummary(rangeDays) {
     const distinct = [...new Set(meals.concat(treats).map((e) => mdEscapeLine(e.details)))];
     distinct.slice(0, 15).forEach((d) => lines.push(`  - ${d}`));
     if (distinct.length > 15) lines.push(`  - …and ${distinct.length - 15} more`);
+  }
+  if (food) {
+    const left = foodDaysLeft();
+    lines.push(`- Prescription food: current bag opened ${food.openedDate}, ~${Math.max(0, left)} days left.`);
   }
   lines.push(``);
 
@@ -764,7 +957,7 @@ function renderDataInfo() {
 }
 
 document.getElementById("export-json").addEventListener("click", () => {
-  const payload = { app: APP_NAME, version: DATA_VERSION, exportedAt: new Date().toISOString(), entries: sortEntries(entries) };
+  const payload = { app: APP_NAME, version: DATA_VERSION, exportedAt: new Date().toISOString(), entries: sortEntries(entries), food };
   downloadFile(`marley-care-log-${todayStr()}.json`, JSON.stringify(payload, null, 2), "application/json");
   showToast("JSON backup downloaded ✓");
 });
@@ -839,16 +1032,19 @@ document.getElementById("import-file").addEventListener("change", async (ev) => 
     if (!mode) return;
   }
 
+  const importedFood = sanitizeFood(data.food);
   if (mode === "replace") {
     entries = imported;
+    food = importedFood;
     showToast(`Replaced with ${imported.length} imported entries ✓`);
   } else {
     const existing = new Set(entries.map((e) => e.id));
     const fresh = imported.filter((e) => !existing.has(e.id));
     entries = entries.concat(fresh);
+    if (!food && importedFood) food = importedFood;
     showToast(`Imported ${fresh.length} new entries ✓${imported.length - fresh.length ? ` (${imported.length - fresh.length} duplicates skipped)` : ""}`);
   }
-  saveEntries();
+  saveState();
   renderDataInfo();
   renderDashboard();
   renderEntryList();
@@ -857,12 +1053,14 @@ document.getElementById("import-file").addEventListener("change", async (ev) => 
 document.getElementById("clear-btn").addEventListener("click", async () => {
   if (!entries.length) { showToast("Nothing to delete"); return; }
   const ok = await confirmDialog(
-    `Delete all ${entries.length} entries? This can't be undone.\n\nTip: export a JSON backup first.`,
+    `Delete all ${entries.length} entries and reset the food tracker? This can't be undone.\n\nTip: export a JSON backup first.`,
     "Delete everything", true
   );
   if (!ok) return;
   entries = [];
-  saveEntries();
+  food = null;
+  foodFormOpen = false;
+  saveState();
   resetForm();
   renderDataInfo();
   renderDashboard();
@@ -926,7 +1124,8 @@ async function loadSampleData() {
   add(2, "note", "Sleeping through the night again, more playful this week");
 
   entries = entries.concat(S);
-  saveEntries();
+  if (!food) food = { openedDate: todayStr(-8), lastsDays: 28 };
+  saveState();
   renderDashboard();
   renderEntryList();
   renderDataInfo();
@@ -946,3 +1145,10 @@ renderDashboard();
 renderEntryList();
 renderDataInfo();
 renderVetSummary();
+
+// PWA: offline caching only works over http(s); the app still runs fine from file://
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((e) => console.warn("Service worker registration failed", e));
+  });
+}
