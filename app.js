@@ -50,6 +50,13 @@ const DETAILS_PLACEHOLDERS = {
 
 // ============ Storage ============
 
+const RECOVERY_KEY = "marley-care-log:v1:corrupt";
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+let storageWriteBlocked = false;
+let stateRevision = 0;
+let saveReloadedExternal = false; // true when saveState aborted due to a newer tab revision
+
 function sanitizeFood(raw) {
   if (!raw || typeof raw !== "object") return null;
   if (typeof raw.openedDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw.openedDate)) return null;
@@ -58,39 +65,148 @@ function sanitizeFood(raw) {
   return { openedDate: raw.openedDate, lastsDays: lasts };
 }
 
-function loadState() {
+function uid() {
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+/** Validate/normalize one entry (load + import). Rejects XSS-prone IDs. */
+function sanitizeEntry(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (typeof raw.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw.date)) return null;
+  if (typeof raw.type !== "string" || !TYPES[raw.type]) return null;
+  const e = {
+    id: typeof raw.id === "string" && SAFE_ID_RE.test(raw.id) ? raw.id : uid(),
+    type: raw.type,
+    date: raw.date,
+    time: typeof raw.time === "string" && /^\d{2}:\d{2}$/.test(raw.time) ? raw.time : null,
+    details: typeof raw.details === "string" ? raw.details.slice(0, 2000) : "",
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
+  };
+  if (raw.type === "symptom" && Number.isInteger(raw.severity) && raw.severity >= 1 && raw.severity <= 5) e.severity = raw.severity;
+  if (raw.type === "gi" && typeof raw.stool === "string" && STOOL_LABELS[raw.stool]) e.stool = raw.stool;
+  return e;
+}
+
+function quarantineCorruptRaw(raw) {
+  if (!raw) return;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { entries: [], food: null };
-    const data = JSON.parse(raw);
-    return {
-      entries: Array.isArray(data.entries) ? data.entries : [],
-      food: sanitizeFood(data.food),
-    };
+    localStorage.setItem(RECOVERY_KEY, raw);
   } catch (e) {
-    console.error("Failed to load data", e);
-    return { entries: [], food: null };
+    console.error("Failed to quarantine corrupt data", e);
   }
 }
 
-function saveState() {
+function applyParsedState(data) {
+  const rawEntries = Array.isArray(data.entries) ? data.entries : [];
+  const cleaned = rawEntries.map(sanitizeEntry).filter(Boolean);
+  return {
+    entries: cleaned,
+    food: sanitizeFood(data.food),
+    revision: Number.isFinite(Number(data.revision)) ? Number(data.revision) : 0,
+    dropped: rawEntries.length - cleaned.length,
+  };
+}
+
+function loadState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ app: APP_NAME, version: DATA_VERSION, entries, food }));
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { entries: [], food: null, revision: 0, ok: true, dropped: 0 };
+    const data = JSON.parse(raw);
+    const applied = applyParsedState(data);
+    return { ...applied, ok: true };
+  } catch (e) {
+    console.error("Failed to load data", e);
+    try {
+      quarantineCorruptRaw(localStorage.getItem(STORAGE_KEY));
+    } catch (_) { /* ignore */ }
+    return { entries: [], food: null, revision: 0, ok: false, dropped: 0 };
+  }
+}
+
+function refreshAllViews() {
+  renderDashboard();
+  renderEntryList();
+  renderDataInfo();
+  if (typeof renderVetSummary === "function") renderVetSummary();
+}
+
+/** Persist current in-memory state. Returns false on block, conflict, or write failure. */
+function saveState() {
+  saveReloadedExternal = false;
+  if (storageWriteBlocked) {
+    showToast("⚠️ Saving is blocked — storage data is corrupt. Export the backup from Data, then Delete everything.");
+    return false;
+  }
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      try {
+        const current = JSON.parse(raw);
+        const theirRev = Number(current.revision) || 0;
+        if (theirRev > stateRevision) {
+          const applied = applyParsedState(current);
+          entries = applied.entries;
+          food = applied.food;
+          stateRevision = applied.revision;
+          saveReloadedExternal = true;
+          showToast("⚠️ Another tab had newer data — reloaded. Please retry.");
+          return false;
+        }
+      } catch (_) {
+        // Unreadable existing value — do not overwrite; quarantine and block.
+        quarantineCorruptRaw(raw);
+        storageWriteBlocked = true;
+        showToast("⚠️ Existing storage is corrupt — saving blocked. Export from Data, then clear.");
+        return false;
+      }
+    }
+    stateRevision += 1;
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ app: APP_NAME, version: DATA_VERSION, revision: stateRevision, entries, food })
+    );
+    return true;
   } catch (e) {
     console.error("Failed to save data", e);
     showToast("⚠️ Could not save — browser storage may be full");
+    return false;
   }
+}
+
+/**
+ * Run a mutation, persist it, and only toast success if the write worked.
+ * Rolls back in-memory state on failure unless another tab's newer data was loaded.
+ */
+function persistMutation(mutate, successToast) {
+  if (storageWriteBlocked) {
+    showToast("⚠️ Saving is blocked — storage data is corrupt. Export the backup from Data, then Delete everything.");
+    return false;
+  }
+  const snapEntries = entries.slice();
+  const snapFood = food ? { ...food } : null;
+  const snapRev = stateRevision;
+  mutate();
+  if (saveState()) {
+    if (successToast) showToast(successToast);
+    return true;
+  }
+  if (!saveReloadedExternal) {
+    entries = snapEntries;
+    food = snapFood;
+    stateRevision = snapRev;
+  }
+  return false;
 }
 
 const _loaded = loadState();
 let entries = _loaded.entries;
 let food = _loaded.food; // { openedDate, lastsDays } or null
+stateRevision = _loaded.revision;
+storageWriteBlocked = !_loaded.ok;
+const _droppedOnLoad = _loaded.dropped;
 
 // ============ Helpers ============
-
-function uid() {
-  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
-}
 
 function todayStr(offsetDays = 0) {
   const d = new Date();
@@ -349,19 +465,21 @@ document.getElementById("entry-form").addEventListener("submit", (ev) => {
   if (formType === "symptom") base.severity = formSeverity;
   if (formType === "gi") base.stool = document.getElementById("f-stool").value;
 
-  if (editingId) {
-    const idx = entries.findIndex((x) => x.id === editingId);
-    if (idx >= 0) {
-      entries[idx] = { ...entries[idx], ...base, severity: base.severity ?? null, stool: base.stool ?? null, updatedAt: now };
+  const wasEdit = !!editingId;
+  const editId = editingId;
+  const saved = persistMutation(() => {
+    if (wasEdit) {
+      const idx = entries.findIndex((x) => x.id === editId);
+      if (idx >= 0) {
+        entries[idx] = { ...entries[idx], ...base, severity: base.severity ?? null, stool: base.stool ?? null, updatedAt: now };
+      }
+    } else {
+      entries.push({ id: uid(), ...base, createdAt: now, updatedAt: now });
     }
-    showToast("Entry updated ✓");
-  } else {
-    entries.push({ id: uid(), ...base, createdAt: now, updatedAt: now });
-    showToast("Entry saved ✓");
-  }
-  saveState();
-  resetForm();
+  }, wasEdit ? "Entry updated ✓" : "Entry saved ✓");
+  if (saved) resetForm();
   renderEntryList();
+  if (saveReloadedExternal) renderDashboard();
 });
 
 async function deleteEntry(id) {
@@ -372,12 +490,12 @@ async function deleteEntry(id) {
     "Delete", true
   );
   if (!ok) return;
-  entries = entries.filter((x) => x.id !== id);
-  if (editingId === id) resetForm();
-  saveState();
+  persistMutation(() => {
+    entries = entries.filter((x) => x.id !== id);
+    if (editingId === id) resetForm();
+  }, "Entry deleted");
   renderEntryList();
   renderDashboard();
-  showToast("Entry deleted");
 }
 
 // ============ Entry list ============
@@ -427,10 +545,11 @@ function entryBadges(e) {
 function entryItemHtml(e, withActions = true) {
   const meta = TYPES[e.type] || { label: e.type, icon: "📌" };
   const timePart = e.time ? ` · ${fmtTime(e.time)}` : "";
+  const safeId = escapeHtml(e.id);
   const actions = withActions
     ? `<div class="entry-actions">
-         <button class="icon-btn" data-action="edit" data-id="${e.id}" title="Edit" aria-label="Edit entry">✏️</button>
-         <button class="icon-btn" data-action="delete" data-id="${e.id}" title="Delete" aria-label="Delete entry">🗑️</button>
+         <button class="icon-btn" data-action="edit" data-id="${safeId}" title="Edit" aria-label="Edit entry">✏️</button>
+         <button class="icon-btn" data-action="delete" data-id="${safeId}" title="Delete" aria-label="Delete entry">🗑️</button>
        </div>`
     : "";
   return `<div class="entry-item">
@@ -494,10 +613,11 @@ function avgSeverity(list) {
 }
 
 function renderDashboard() {
-  const empty = entries.length === 0;
-  document.getElementById("dashboard-empty").hidden = !empty;
-  document.getElementById("dashboard-content").hidden = empty;
-  if (empty) return;
+  // Keep the food tracker reachable even when there are no entries yet.
+  const totallyEmpty = entries.length === 0 && !food && !storageWriteBlocked;
+  document.getElementById("dashboard-empty").hidden = !totallyEmpty;
+  document.getElementById("dashboard-content").hidden = totallyEmpty;
+  if (totallyEmpty) return;
 
   const today = todayStr();
 
@@ -586,8 +706,9 @@ function renderDashboard() {
     .join("");
 
   // --- Recent entries ---
-  document.getElementById("recent-entries").innerHTML =
-    sortEntries(entries).slice(0, 5).map((e) => entryItemHtml(e, false)).join("");
+  document.getElementById("recent-entries").innerHTML = entries.length
+    ? sortEntries(entries).slice(0, 5).map((e) => entryItemHtml(e, false)).join("")
+    : `<p class="muted small">No entries logged yet.</p>`;
 
   renderBanners();
   renderCytoCycle();
@@ -599,6 +720,13 @@ function renderDashboard() {
 function renderBanners() {
   const wrap = document.getElementById("banners");
   const items = [];
+
+  if (storageWriteBlocked) {
+    items.push({
+      danger: true,
+      text: "⚠️ Saved data looks corrupt — saving is blocked. Go to Data → Export JSON to download the backup, then Delete everything to unblock.",
+    });
+  }
 
   const lastCyto = lastCytopoint();
   if (lastCyto) {
@@ -716,22 +844,23 @@ document.getElementById("food-form").addEventListener("submit", (ev) => {
     showToast("The opened date can't be in the future");
     return;
   }
-  food = { openedDate: opened, lastsDays: lasts };
-  foodFormOpen = false;
-  saveState();
+  const saved = persistMutation(() => {
+    food = { openedDate: opened, lastsDays: lasts };
+    foodFormOpen = false;
+  }, "Food tracker updated ✓");
+  if (!saved && !saveReloadedExternal) foodFormOpen = true;
   renderDashboard();
-  showToast("Food tracker updated ✓");
 });
 
 document.getElementById("food-status").addEventListener("click", (ev) => {
   if (ev.target.id !== "food-newbag" || !food) return;
-  food = { ...food, openedDate: todayStr() };
   const now = new Date().toISOString();
-  entries.push({ id: uid(), type: "note", date: todayStr(), time: null, details: "Opened a new bag of prescription food", createdAt: now, updatedAt: now });
-  saveState();
+  persistMutation(() => {
+    food = { ...food, openedDate: todayStr() };
+    entries.push({ id: uid(), type: "note", date: todayStr(), time: null, details: "Opened a new bag of prescription food", createdAt: now, updatedAt: now });
+  }, "New bag logged 🛍");
   renderDashboard();
   renderEntryList();
-  showToast("New bag logged 🛍");
 });
 
 document.getElementById("recent-see-all").addEventListener("click", () => switchView("log"));
@@ -948,16 +1077,35 @@ function downloadFile(filename, content, mime) {
 
 function renderDataInfo() {
   const info = document.getElementById("data-info");
-  if (!entries.length) {
+  if (storageWriteBlocked) {
+    info.textContent = "⚠️ Corrupt storage detected — saving is blocked. Export JSON downloads the raw backup; Delete everything clears it and unblocks the app.";
+    return;
+  }
+  if (!entries.length && !food) {
     info.textContent = "No entries stored yet.";
     return;
   }
+  if (!entries.length) {
+    info.textContent = "Food tracker saved · no entries yet.";
+    return;
+  }
   const sorted = sortEntries(entries);
-  info.textContent = `${entries.length} entries stored · earliest ${fmtDate(sorted[sorted.length - 1].date)} · latest ${fmtDate(sorted[0].date)}`;
+  const foodNote = food ? " · food tracker on" : "";
+  info.textContent = `${entries.length} entries stored · earliest ${fmtDate(sorted[sorted.length - 1].date)} · latest ${fmtDate(sorted[0].date)}${foodNote}`;
 }
 
 document.getElementById("export-json").addEventListener("click", () => {
-  const payload = { app: APP_NAME, version: DATA_VERSION, exportedAt: new Date().toISOString(), entries: sortEntries(entries), food };
+  if (storageWriteBlocked) {
+    const raw = localStorage.getItem(RECOVERY_KEY) || localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      showToast("⚠️ No corrupt backup found to export");
+      return;
+    }
+    downloadFile(`marley-care-log-corrupt-${todayStr()}.json`, raw, "application/json");
+    showToast("Corrupt backup downloaded — then use Delete everything to unblock");
+    return;
+  }
+  const payload = { app: APP_NAME, version: DATA_VERSION, revision: stateRevision, exportedAt: new Date().toISOString(), entries: sortEntries(entries), food };
   downloadFile(`marley-care-log-${todayStr()}.json`, JSON.stringify(payload, null, 2), "application/json");
   showToast("JSON backup downloaded ✓");
 });
@@ -979,27 +1127,17 @@ document.getElementById("export-csv").addEventListener("click", () => {
 });
 
 function sanitizeImportedEntry(raw) {
-  if (!raw || typeof raw !== "object") return null;
-  if (typeof raw.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw.date)) return null;
-  if (typeof raw.type !== "string" || !TYPES[raw.type]) return null;
-  const e = {
-    id: typeof raw.id === "string" && raw.id ? raw.id : uid(),
-    type: raw.type,
-    date: raw.date,
-    time: typeof raw.time === "string" && /^\d{2}:\d{2}$/.test(raw.time) ? raw.time : null,
-    details: typeof raw.details === "string" ? raw.details.slice(0, 2000) : "",
-    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
-    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
-  };
-  if (raw.type === "symptom" && Number.isInteger(raw.severity) && raw.severity >= 1 && raw.severity <= 5) e.severity = raw.severity;
-  if (raw.type === "gi" && typeof raw.stool === "string" && STOOL_LABELS[raw.stool]) e.stool = raw.stool;
-  return e;
+  return sanitizeEntry(raw);
 }
 
 document.getElementById("import-file").addEventListener("change", async (ev) => {
   const file = ev.target.files[0];
   ev.target.value = ""; // allow re-selecting the same file
   if (!file) return;
+  if (storageWriteBlocked) {
+    showToast("⚠️ Clear corrupt storage before importing");
+    return;
+  }
   let data;
   try {
     data = JSON.parse(await file.text());
@@ -1033,39 +1171,72 @@ document.getElementById("import-file").addEventListener("change", async (ev) => 
   }
 
   const importedFood = sanitizeFood(data.food);
-  if (mode === "replace") {
-    entries = imported;
-    food = importedFood;
-    showToast(`Replaced with ${imported.length} imported entries ✓`);
-  } else {
-    const existing = new Set(entries.map((e) => e.id));
-    const fresh = imported.filter((e) => !existing.has(e.id));
-    entries = entries.concat(fresh);
-    if (!food && importedFood) food = importedFood;
-    showToast(`Imported ${fresh.length} new entries ✓${imported.length - fresh.length ? ` (${imported.length - fresh.length} duplicates skipped)` : ""}`);
-  }
-  saveState();
+  let toastMsg = "";
+  const saved = persistMutation(() => {
+    if (mode === "replace") {
+      entries = imported;
+      food = importedFood;
+      toastMsg = `Replaced with ${imported.length} imported entries ✓`;
+    } else {
+      const existing = new Set(entries.map((e) => e.id));
+      const fresh = imported.filter((e) => !existing.has(e.id));
+      entries = entries.concat(fresh);
+      if (!food && importedFood) food = importedFood;
+      toastMsg = `Imported ${fresh.length} new entries ✓${imported.length - fresh.length ? ` (${imported.length - fresh.length} duplicates skipped)` : ""}`;
+    }
+  }, null);
+  if (saved) showToast(toastMsg);
   renderDataInfo();
   renderDashboard();
   renderEntryList();
 });
 
 document.getElementById("clear-btn").addEventListener("click", async () => {
-  if (!entries.length) { showToast("Nothing to delete"); return; }
+  if (storageWriteBlocked) {
+    const ok = await confirmDialog(
+      "Clear corrupt storage and unblock saving? Export the corrupt backup first if you still need it.\n\nThis removes the broken local data.",
+      "Clear corrupt data", true
+    );
+    if (!ok) return;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(RECOVERY_KEY);
+    } catch (e) {
+      console.error("Failed to clear corrupt storage", e);
+      showToast("⚠️ Could not clear storage");
+      return;
+    }
+    entries = [];
+    food = null;
+    foodFormOpen = false;
+    stateRevision = 0;
+    storageWriteBlocked = false;
+    resetForm();
+    refreshAllViews();
+    showToast("Corrupt storage cleared — saving unblocked");
+    return;
+  }
+
+  if (!entries.length && !food) { showToast("Nothing to delete"); return; }
+  const what = entries.length && food
+    ? `all ${entries.length} entries and reset the food tracker`
+    : entries.length
+      ? `all ${entries.length} entries`
+      : "the food tracker";
   const ok = await confirmDialog(
-    `Delete all ${entries.length} entries and reset the food tracker? This can't be undone.\n\nTip: export a JSON backup first.`,
+    `Delete ${what}? This can't be undone.\n\nTip: export a JSON backup first.`,
     "Delete everything", true
   );
   if (!ok) return;
-  entries = [];
-  food = null;
-  foodFormOpen = false;
-  saveState();
+  persistMutation(() => {
+    entries = [];
+    food = null;
+    foodFormOpen = false;
+  }, "All entries deleted");
   resetForm();
   renderDataInfo();
   renderDashboard();
   renderEntryList();
-  showToast("All entries deleted");
 });
 
 // ============ Sample data ============
@@ -1123,14 +1294,14 @@ async function loadSampleData() {
   add(35, "note", "Ordered next bag of prescription food — ~3 weeks left in current bag");
   add(2, "note", "Sleeping through the night again, more playful this week");
 
-  entries = entries.concat(S);
-  if (!food) food = { openedDate: todayStr(-8), lastsDays: 28 };
-  saveState();
+  const saved = persistMutation(() => {
+    entries = entries.concat(S);
+    if (!food) food = { openedDate: todayStr(-8), lastsDays: 28 };
+  }, `Added ${S.length} sample entries ✓`);
   renderDashboard();
   renderEntryList();
   renderDataInfo();
-  switchView("dashboard");
-  showToast(`Added ${S.length} sample entries ✓`);
+  if (saved) switchView("dashboard");
 }
 
 document.getElementById("sample-btn").addEventListener("click", loadSampleData);
@@ -1145,6 +1316,40 @@ renderDashboard();
 renderEntryList();
 renderDataInfo();
 renderVetSummary();
+
+if (storageWriteBlocked) {
+  showToast("⚠️ Corrupt storage detected — saving blocked until you export & clear it");
+} else if (_droppedOnLoad > 0) {
+  showToast(`⚠️ Skipped ${_droppedOnLoad} invalid entr${_droppedOnLoad === 1 ? "y" : "ies"} while loading`);
+}
+
+// Cross-tab sync: another tab wrote to localStorage
+window.addEventListener("storage", (ev) => {
+  if (ev.key !== STORAGE_KEY) return;
+  if (storageWriteBlocked) return;
+  if (ev.newValue == null) {
+    entries = [];
+    food = null;
+    stateRevision = 0;
+    foodFormOpen = false;
+    refreshAllViews();
+    showToast("Data cleared in another tab");
+    return;
+  }
+  try {
+    const data = JSON.parse(ev.newValue);
+    const theirRev = Number(data.revision) || 0;
+    if (theirRev <= stateRevision) return;
+    const applied = applyParsedState(data);
+    entries = applied.entries;
+    food = applied.food;
+    stateRevision = applied.revision;
+    refreshAllViews();
+    showToast("Synced changes from another tab");
+  } catch (e) {
+    console.error("Failed to sync from another tab", e);
+  }
+});
 
 // PWA: offline caching only works over http(s); the app still runs fine from file://
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
