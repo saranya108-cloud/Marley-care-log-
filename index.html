@@ -66,7 +66,8 @@
         <div class="btn-row">
           <a class="btn btn-small" href="https://raynenutrition.com/" target="_blank" rel="noopener noreferrer">Order from Rayne Nutrition</a>
         </div>
-        <form id="food-form" hidden>
+        <form id="food-form" class="food-form" hidden>
+          <h4>Rayne Rabbit &amp; Quinoa Kibble</h4>
           <div class="form-row">
             <div class="field">
               <label class="field-label" for="food-opened">Bag opened on</label>
@@ -76,6 +77,27 @@
               <label class="field-label" for="food-lasts">Bag lasts (days)</label>
               <input type="number" id="food-lasts" min="1" max="365" placeholder="e.g. 28">
             </div>
+          </div>
+          <h4>Rayne Rabbit Stew</h4>
+          <div class="form-row">
+            <div class="field">
+              <label class="field-label" for="stew-restocked">Supply restocked on</label>
+              <input type="date" id="stew-restocked">
+            </div>
+            <div class="field">
+              <label class="field-label" for="stew-cadence">Reorder every (days)</label>
+              <input type="number" id="stew-cadence" min="21" max="28" value="28">
+            </div>
+          </div>
+          <h4>Rayne Maintenance canned</h4>
+          <div class="field">
+            <label class="field-label" for="maintenance-stock">Optional pill-helper stock</label>
+            <select id="maintenance-stock">
+              <option value="">Not tracked</option>
+              <option value="in-stock">In stock</option>
+              <option value="low">Low stock</option>
+              <option value="out">Out of stock</option>
+            </select>
           </div>
           <div class="btn-row food-form-btns">
             <button type="submit" class="btn btn-primary">Save</button>

@@ -24,7 +24,7 @@ All data is stored in your browser's localStorage on that device. Use **Data →
 - **Dashboard** — days since last Cytopoint with the next due date, 7-day itch severity average with a week-over-week trend, abnormal GI count, a 14-day itch severity strip, open vet questions, and recent entries.
 - **Cytopoint reminders** — Marley gets an injection every 6 weeks (`CYTOPOINT_INTERVAL_DAYS` in `app.js`). A banner appears when the next shot is within a week, due today, or overdue.
 - **Cytopoint cycle symptom tracker** — average itch severity per week since the last injection, so it's easy to spot the shot wearing off toward the end of the cycle. Also included in the vet summary.
-- **Prescription food tracker** — record when a bag was opened and how long a bag lasts; the dashboard shows days of food left with a progress bar, a one-tap "Opened a new bag today" button (which also logs a note entry), and a reorder banner when under a week remains.
+- **Prescription food tracker** — independently tracks Rayne Rabbit & Quinoa Kibble by opened date and days left, Rayne Rabbit Stew on a 3–4 week cadence with an early order-soon warning, and optional Rayne Maintenance canned pill-helper stock.
 - **Vet Summary** — generates a Markdown summary for a chosen period (14/30/60/90 days or all time): symptom log with severities, GI breakdown, medications & treatments, Cytopoint history, VARL check-ins, diet notes, suspected triggers, and a checklist of questions for the vet. Copy to clipboard or download as `.md`.
 - **Data** — export full JSON backups (entries + food tracker), export CSV for spreadsheets, import JSON backups (merge with duplicate detection, or replace), load sample demo data, and a guarded delete-all.
 - **PWA / installable** — when served over http(s), a service worker caches the app shell so it loads offline, and you can install it to your phone's home screen ("Add to Home Screen") or desktop.
@@ -59,7 +59,7 @@ Entries are stored under the localStorage key `marley-care-log:v1`:
 }
 ```
 
-`severity` (1–5) appears on `symptom` entries; `stool` (`normal | soft | diarrhea | mucus | constipated | vomit`) on `gi` entries. The payload also carries `"food": { "openedDate", "lastsDays" }` for the prescription food tracker. JSON exports use the same shape, so an export is also a portable backup.
+`severity` (1–5) appears on `symptom` entries; `stool` (`normal | soft | diarrhea | mucus | constipated | vomit`) on `gi` entries. The payload also carries a `food` object. Its existing `openedDate` and `lastsDays` fields remain the kibble tracker; optional `stew: { restockedDate, cadenceDays }` and `maintenanceStock` (`in-stock | low | out`) fields store the other supplies. Legacy food objects remain valid. JSON exports use the same shape, so an export is also a portable backup.
 
 ## Known limitations
 

@@ -150,9 +150,19 @@ h1 { font-size: 1.25rem; letter-spacing: -0.01em; }
 }
 
 /* ---------- Food tracker ---------- */
-.food-days { font-size: 1.4rem; font-weight: 700; margin-bottom: 6px; }
+.food-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.food-item:first-child { padding-top: 2px; }
+.food-item-last { border-bottom: 0; padding-bottom: 2px; }
+.food-item h4, .food-form h4 { margin: 0 0 6px; font-size: 0.92rem; }
+.food-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.food-item-heading h4 { margin-bottom: 0; }
+.food-days { font-size: 1.15rem; font-weight: 700; margin-bottom: 6px; }
 .food-days.food-warn { color: var(--warn); }
 .food-days.food-danger { color: var(--danger); }
+.food-state { font-weight: 700; font-size: 0.92rem; }
+.food-state.food-warn, .food-stock.food-warn { color: var(--warn); }
+.food-state.food-danger, .food-stock.food-danger { color: var(--danger); }
+.food-stock { font-size: 0.78rem; font-weight: 700; white-space: nowrap; }
 .food-bar {
   height: 8px;
   background: var(--bg);
@@ -166,6 +176,9 @@ h1 { font-size: 1.25rem; letter-spacing: -0.01em; }
 .food-bar-fill.food-danger { background: var(--danger); }
 #food-status .btn { margin-top: 10px; }
 .food-form-btns { margin-top: 12px; }
+.food-form { margin-top: 12px; }
+.food-form h4 { margin-top: 14px; }
+.food-form h4:first-child { margin-top: 0; }
 
 /* ---------- Buttons ---------- */
 .btn {

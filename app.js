@@ -8,6 +8,8 @@ const STORAGE_KEY = "marley-care-log:v1";
 const APP_NAME = "marley-care-log";
 const DATA_VERSION = 1;
 const CYTOPOINT_INTERVAL_DAYS = 42; // Marley gets Cytopoint every 6 weeks
+const STEW_DEFAULT_CADENCE_DAYS = 28;
+const STEW_ORDER_SOON_DAYS = 7;
 
 const TYPES = {
   meal:       { label: "Meal",             icon: "🍗" },
@@ -62,7 +64,21 @@ function sanitizeFood(raw) {
   if (typeof raw.openedDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw.openedDate)) return null;
   const lasts = Number(raw.lastsDays);
   if (!Number.isInteger(lasts) || lasts < 1 || lasts > 365) return null;
-  return { openedDate: raw.openedDate, lastsDays: lasts };
+  const cleaned = { openedDate: raw.openedDate, lastsDays: lasts };
+  if (raw.stew && typeof raw.stew === "object") {
+    const cadence = Number(raw.stew.cadenceDays);
+    if (
+      typeof raw.stew.restockedDate === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(raw.stew.restockedDate) &&
+      Number.isInteger(cadence) && cadence >= 21 && cadence <= 28
+    ) {
+      cleaned.stew = { restockedDate: raw.stew.restockedDate, cadenceDays: cadence };
+    }
+  }
+  if (["in-stock", "low", "out"].includes(raw.maintenanceStock)) {
+    cleaned.maintenanceStock = raw.maintenanceStock;
+  }
+  return cleaned;
 }
 
 function uid() {
@@ -239,6 +255,11 @@ function addDays(dateStr, n) {
 function foodDaysLeft() {
   if (!food) return null;
   return food.lastsDays - daysBetween(food.openedDate, todayStr());
+}
+
+function stewDaysUntilReorder() {
+  if (!food?.stew) return null;
+  return food.stew.cadenceDays - daysBetween(food.stew.restockedDate, todayStr());
 }
 
 function lastCytopoint() {
@@ -737,10 +758,16 @@ function renderBanners() {
     else if (until <= 7) items.push({ danger: false, text: `💉 Cytopoint due in ${until} day${until === 1 ? "" : "s"} (~${fmtDate(due)})` });
   }
 
-  const left = foodDaysLeft();
-  if (left != null) {
-    if (left <= 0) items.push({ danger: true, text: `🍗 Prescription food bag should be empty — reorder now` });
-    else if (left <= 7) items.push({ danger: false, text: `🍗 ~${left} day${left === 1 ? "" : "s"} of prescription food left — time to reorder` });
+  const kibbleLeft = foodDaysLeft();
+  if (kibbleLeft != null) {
+    if (kibbleLeft <= 0) items.push({ danger: true, text: `🍗 Rayne Rabbit & Quinoa Kibble should be empty — reorder now` });
+    else if (kibbleLeft <= 7) items.push({ danger: false, text: `🍗 ~${kibbleLeft} day${kibbleLeft === 1 ? "" : "s"} of Rayne Rabbit & Quinoa Kibble left — time to reorder` });
+  }
+
+  const stewLeft = stewDaysUntilReorder();
+  if (stewLeft != null) {
+    if (stewLeft <= 0) items.push({ danger: true, text: `🥫 Rayne Rabbit Stew has reached its usual reorder date — reorder now` });
+    else if (stewLeft <= STEW_ORDER_SOON_DAYS) items.push({ danger: false, text: `🥫 Rayne Rabbit Stew order soon — usual reorder date is in ~${stewLeft} day${stewLeft === 1 ? "" : "s"}` });
   }
 
   wrap.hidden = items.length === 0;
@@ -804,22 +831,59 @@ function renderFoodCard() {
   if (showForm) {
     document.getElementById("food-opened").value = food ? food.openedDate : todayStr();
     document.getElementById("food-lasts").value = food ? food.lastsDays : "";
+    document.getElementById("stew-restocked").value = food?.stew?.restockedDate || "";
+    document.getElementById("stew-cadence").value = food?.stew?.cadenceDays || STEW_DEFAULT_CADENCE_DAYS;
+    document.getElementById("maintenance-stock").value = food?.maintenanceStock || "";
     document.getElementById("food-form-cancel").hidden = !food;
   }
 
   if (!food) {
-    status.innerHTML = `<p class="muted small">Log when you open a bag and how long a bag usually lasts — a reorder reminder will show up here when it runs low.</p>`;
+    status.innerHTML = `<p class="muted small">Track Marley's regular Rayne meals and optional pill-helper stock independently.</p>`;
     return;
   }
-  const left = foodDaysLeft();
+  const kibbleLeft = foodDaysLeft();
   const outDate = addDays(food.openedDate, food.lastsDays);
-  const cls = left <= 2 ? "food-danger" : left <= 7 ? "food-warn" : "";
-  const pct = Math.max(0, Math.min(100, (left / food.lastsDays) * 100));
+  const kibbleCls = kibbleLeft <= 2 ? "food-danger" : kibbleLeft <= 7 ? "food-warn" : "";
+  const kibblePct = Math.max(0, Math.min(100, (kibbleLeft / food.lastsDays) * 100));
+
+  let stewHtml = `<p class="muted small">Not tracked yet · usually reordered every 3–4 weeks.</p>`;
+  if (food.stew) {
+    const stewLeft = stewDaysUntilReorder();
+    const stewCls = stewLeft <= 0 ? "food-danger" : stewLeft <= STEW_ORDER_SOON_DAYS ? "food-warn" : "";
+    const stewDue = addDays(food.stew.restockedDate, food.stew.cadenceDays);
+    const stewText = stewLeft <= 0
+      ? "Reorder now"
+      : stewLeft <= STEW_ORDER_SOON_DAYS
+        ? `Order soon · ~${stewLeft} day${stewLeft === 1 ? "" : "s"} to usual reorder`
+        : `~${stewLeft} days to usual reorder`;
+    stewHtml = `
+      <div class="food-state ${stewCls}">${stewText}</div>
+      <p class="muted small">Restocked ${fmtDate(food.stew.restockedDate)} · ${food.stew.cadenceDays}-day cadence · order ~${fmtDate(stewDue)}</p>
+      <button class="btn btn-small" id="food-newstew" type="button">Restocked stew today</button>`;
+  }
+
+  const stockLabels = { "in-stock": "In stock", low: "Low stock", out: "Out of stock" };
+  const maintenanceLabel = stockLabels[food.maintenanceStock] || "Not tracked";
+  const maintenanceCls = food.maintenanceStock === "out" ? "food-danger" : food.maintenanceStock === "low" ? "food-warn" : "";
   status.innerHTML = `
-    <div class="food-days ${cls}">${left <= 0 ? "Out of food — reorder!" : `~${left} day${left === 1 ? "" : "s"} of food left`}</div>
-    <div class="food-bar"><div class="food-bar-fill ${cls}" style="width:${pct}%"></div></div>
-    <p class="muted small">Bag opened ${fmtDate(food.openedDate)} · lasts ~${food.lastsDays} days · runs out ~${fmtDate(outDate)}</p>
-    <button class="btn btn-small" id="food-newbag" type="button">🛍 Opened a new bag today</button>`;
+    <section class="food-item">
+      <h4>Rayne Rabbit &amp; Quinoa Kibble</h4>
+      <div class="food-days ${kibbleCls}">${kibbleLeft <= 0 ? "Out of food — reorder!" : `~${kibbleLeft} day${kibbleLeft === 1 ? "" : "s"} of food left`}</div>
+      <div class="food-bar"><div class="food-bar-fill ${kibbleCls}" style="width:${kibblePct}%"></div></div>
+      <p class="muted small">Bag opened ${fmtDate(food.openedDate)} · lasts ~${food.lastsDays} days · runs out ~${fmtDate(outDate)}</p>
+      <button class="btn btn-small" id="food-newbag" type="button">Opened a new bag today</button>
+    </section>
+    <section class="food-item">
+      <h4>Rayne Rabbit Stew</h4>
+      ${stewHtml}
+    </section>
+    <section class="food-item food-item-last">
+      <div class="food-item-heading">
+        <h4>Rayne Maintenance canned</h4>
+        <span class="food-stock ${maintenanceCls}">${maintenanceLabel}</span>
+      </div>
+      <p class="muted small">Optional low-use backup for pills and medication.</p>
+    </section>`;
 }
 
 document.getElementById("food-edit-btn").addEventListener("click", () => {
@@ -836,6 +900,9 @@ document.getElementById("food-form").addEventListener("submit", (ev) => {
   ev.preventDefault();
   const opened = document.getElementById("food-opened").value;
   const lasts = parseInt(document.getElementById("food-lasts").value, 10);
+  const stewRestocked = document.getElementById("stew-restocked").value;
+  const stewCadence = parseInt(document.getElementById("stew-cadence").value, 10);
+  const maintenanceStock = document.getElementById("maintenance-stock").value;
   if (!opened || !Number.isInteger(lasts) || lasts < 1 || lasts > 365) {
     showToast("Enter the opened date and how many days a bag lasts");
     return;
@@ -844,8 +911,18 @@ document.getElementById("food-form").addEventListener("submit", (ev) => {
     showToast("The opened date can't be in the future");
     return;
   }
+  if (stewRestocked && (!Number.isInteger(stewCadence) || stewCadence < 21 || stewCadence > 28)) {
+    showToast("Stew reorder cadence must be between 21 and 28 days");
+    return;
+  }
+  if (stewRestocked > todayStr()) {
+    showToast("The stew restocked date can't be in the future");
+    return;
+  }
   const saved = persistMutation(() => {
     food = { openedDate: opened, lastsDays: lasts };
+    if (stewRestocked) food.stew = { restockedDate: stewRestocked, cadenceDays: stewCadence };
+    if (maintenanceStock) food.maintenanceStock = maintenanceStock;
     foodFormOpen = false;
   }, "Food tracker updated ✓");
   if (!saved && !saveReloadedExternal) foodFormOpen = true;
@@ -853,12 +930,16 @@ document.getElementById("food-form").addEventListener("submit", (ev) => {
 });
 
 document.getElementById("food-status").addEventListener("click", (ev) => {
-  if (ev.target.id !== "food-newbag" || !food) return;
+  if (!food || !["food-newbag", "food-newstew"].includes(ev.target.id)) return;
   const now = new Date().toISOString();
+  const isKibble = ev.target.id === "food-newbag";
   persistMutation(() => {
-    food = { ...food, openedDate: todayStr() };
-    entries.push({ id: uid(), type: "note", date: todayStr(), time: null, details: "Opened a new bag of prescription food", createdAt: now, updatedAt: now });
-  }, "New bag logged 🛍");
+    food = isKibble
+      ? { ...food, openedDate: todayStr() }
+      : { ...food, stew: { ...food.stew, restockedDate: todayStr() } };
+    const details = isKibble ? "Opened a new bag of Rayne Rabbit & Quinoa Kibble" : "Restocked Rayne Rabbit Stew";
+    entries.push({ id: uid(), type: "note", date: todayStr(), time: null, details, createdAt: now, updatedAt: now });
+  }, isKibble ? "New kibble bag logged 🛍" : "Stew restock logged 🥫");
   renderDashboard();
   renderEntryList();
 });
@@ -989,7 +1070,15 @@ function generateVetSummary(rangeDays) {
   }
   if (food) {
     const left = foodDaysLeft();
-    lines.push(`- Prescription food: current bag opened ${food.openedDate}, ~${Math.max(0, left)} days left.`);
+    lines.push(`- Rayne Rabbit & Quinoa Kibble: current bag opened ${food.openedDate}, ~${Math.max(0, left)} days left.`);
+    if (food.stew) {
+      const stewLeft = stewDaysUntilReorder();
+      lines.push(`- Rayne Rabbit Stew: restocked ${food.stew.restockedDate}, usual ${food.stew.cadenceDays}-day reorder cadence${stewLeft <= 0 ? ", reorder due" : `, ~${stewLeft} days until usual reorder`}.`);
+    }
+    if (food.maintenanceStock) {
+      const stockLabels = { "in-stock": "in stock", low: "low stock", out: "out of stock" };
+      lines.push(`- Rayne Maintenance canned (optional pill helper): ${stockLabels[food.maintenanceStock]}.`);
+    }
   }
   lines.push(``);
 
@@ -1296,7 +1385,14 @@ async function loadSampleData() {
 
   const saved = persistMutation(() => {
     entries = entries.concat(S);
-    if (!food) food = { openedDate: todayStr(-8), lastsDays: 28 };
+    if (!food) {
+      food = {
+        openedDate: todayStr(-8),
+        lastsDays: 28,
+        stew: { restockedDate: todayStr(-18), cadenceDays: STEW_DEFAULT_CADENCE_DAYS },
+        maintenanceStock: "in-stock",
+      };
+    }
   }, `Added ${S.length} sample entries ✓`);
   renderDashboard();
   renderEntryList();

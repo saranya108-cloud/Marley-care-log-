@@ -2,7 +2,7 @@
    Bump the cache version when shipping changes to any cached file. */
 "use strict";
 
-const CACHE = "marley-care-log-v2";
+const CACHE = "marley-care-log-v3";
 const ASSETS = [
   "./",
   "./index.html",
